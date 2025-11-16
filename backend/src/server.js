@@ -23,7 +23,7 @@ app.use(
   })
 );
 
-=
+
 app.use("/api/auth", authRoutes);
 
 app.get("/", (req, res) => {
