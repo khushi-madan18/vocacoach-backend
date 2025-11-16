@@ -9,61 +9,63 @@ const {
   FRONTEND_URL,
   JWT_SECRET,
   JWT_EXPIRES_IN,
-  OAUTH_STRATEGY,
-  COOKIE_SECURE,
 } = process.env;
 
+// 1) Redirect user to Google
 export const googleAuth = (req, res) => {
   const redirect_uri = `${BACKEND_URL}/api/auth/google/callback`;
 
-  const options = {
-    redirect_uri,
+  const params = new URLSearchParams({
     client_id: GOOGLE_CLIENT_ID,
-    scope: [
-      "https://www.googleapis.com/auth/userinfo.profile",
-      "https://www.googleapis.com/auth/userinfo.email",
-      "openid",
-    ].join(" "),
+    redirect_uri,
     response_type: "code",
+    scope: [
+      "openid",
+      "email",
+      "profile"
+    ].join(" "),
     access_type: "offline",
     prompt: "consent",
-  };
+  });
 
-  const authUrl =
-    "https://accounts.google.com/o/oauth2/v2/auth?" +
-    new URLSearchParams(options).toString();
-
-  res.redirect(authUrl);
+  res.redirect(
+    "https://accounts.google.com/o/oauth2/v2/auth?" + params.toString()
+  );
 };
 
+// 2) Handle callback & exchange code for access token
 export const googleCallback = async (req, res) => {
   const code = req.query.code;
 
   try {
-    const tokenRes = await axios.post(
+    // GOOGLE REQUIRES form-urlencoded, NOT JSON
+    const tokenResponse = await axios.post(
       "https://oauth2.googleapis.com/token",
-      {
+      new URLSearchParams({
         code,
         client_id: GOOGLE_CLIENT_ID,
         client_secret: GOOGLE_CLIENT_SECRET,
         redirect_uri: `${BACKEND_URL}/api/auth/google/callback`,
         grant_type: "authorization_code",
-      },
-      { headers: { "Content-Type": "application/json" } }
-    );
-
-    const { access_token } = tokenRes.data;
-
-    const userRes = await axios.get(
-      "https://www.googleapis.com/oauth2/v2/userinfo",
+      }).toString(),
       {
         headers: {
-          Authorization: `Bearer ${access_token}`,
+          "Content-Type": "application/x-www-form-urlencoded",
         },
       }
     );
 
-    const profile = userRes.data;
+    const access_token = tokenResponse.data.access_token;
+
+    // Fetch Google profile
+    const userResponse = await axios.get(
+      "https://www.googleapis.com/oauth2/v2/userinfo",
+      {
+        headers: { Authorization: `Bearer ${access_token}` },
+      }
+    );
+
+    const profile = userResponse.data;
 
     let user = await prisma.user.findUnique({
       where: { email: profile.email },
@@ -74,7 +76,6 @@ export const googleCallback = async (req, res) => {
         data: {
           name: profile.name,
           email: profile.email,
-          password: null,
           provider: "google",
         },
       });
@@ -86,10 +87,12 @@ export const googleCallback = async (req, res) => {
       { expiresIn: JWT_EXPIRES_IN }
     );
 
-    const redirectUrl = `${FRONTEND_URL}/oauth-callback?token=${token}`;
-    return res.redirect(redirectUrl);
+    const redirectURL = `${FRONTEND_URL}/oauth-callback?token=${token}`;
+    return res.redirect(redirectURL);
   } catch (err) {
-    console.log("OAuth error:", err.message);
-    return res.status(500).json({ error: "OAuth failed" });
+    console.error("OAuth error:", err.response?.data || err.message);
+    return res
+      .status(500)
+      .json({ error: "OAuth failed", details: err.response?.data || err.message });
   }
 };
